@@ -73,10 +73,9 @@ for _, p in ipairs(PROFILES) do
     }
   end
 
-  local inventory = {
-    HM01 = 1,
-    HM03 = 1,
-  }
+  -- Gen 3 numbers its HMs; Gen 1/2 inventories name them after the move.
+  local inventory = (p.gen == 3) and { HM01 = 1, HM03 = 1 }
+    or { HM_CUT = 1, HM_SURF = 1 }
 
   local save = {
     party = party,
@@ -154,7 +153,7 @@ for _, p in ipairs(PROFILES) do
   if p.gen == 3 then
     bag.pockets.TM_CASE[2] = nil
   end
-  inventory.HM03 = nil
+  inventory.HM03, inventory.HM_SURF = nil, nil
 
   local ctxSurf = { save = save, session = session, party = party, data = opts.data }
   local resSurfNoItem = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
@@ -164,7 +163,7 @@ for _, p in ipairs(PROFILES) do
   if p.gen == 3 then
     bag.pockets.TM_CASE[2] = { id = "HM03", qty = 1 }
   end
-  inventory.HM03 = 1
+  if p.gen == 3 then inventory.HM03 = 1 else inventory.HM_SURF = 1 end
 
   -- Now Surf succeeds
   local resSurfOk = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
@@ -182,6 +181,81 @@ for _, p in ipairs(PROFILES) do
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   check(resRollback == nil, p.version .. ": rollback restores vanilla refusal")
+end
+
+-- ------------------------------------------------------------ 3. Real engine call paths
+-- The cases above call the hook directly with a hand-built ctx. These go
+-- through the engine's own callers, so they see the ctx the game really passes.
+
+local function setUpvalue(fn, name, value)
+  for i = 1, math.huge do
+    local upName = debug.getupvalue(fn, i)
+    if not upName then error("no upvalue " .. name) end
+    if upName == name then debug.setupvalue(fn, i, value); return end
+  end
+end
+
+local function knowsTackle()
+  return { species = "PIDGEY", hp = 20, maxHp = 20, level = 5, moves = { { id = "TACKLE" } } }
+end
+
+-- Gen 1: OverworldState:partyKnows passes only { save, data }.
+local OverworldState = require("src.world.OverworldController")
+for _, version in ipairs({ "red", "blue", "yellow" }) do
+  GameVersion.set(version)
+  Runtime.reset()
+  local mon = knowsTackle()
+  local save = { party = { mon }, inventory = {} }
+  local function partyKnows(run, move)
+    setUpvalue(OverworldState.partyKnows, "Game", { save = save, data = run.data })
+    return OverworldState.partyKnows({}, move)
+  end
+
+  local vanilla = Sdk.loadNone({ generation = 1 })
+  save.inventory = { HM_CUT = 1, CASCADEBADGE = 1 }
+  check(partyKnows(vanilla, "CUT") == nil, version .. ": vanilla refuses CUT without a mon that knows it")
+  vanilla.release()
+
+  local run = Sdk.loadMod(MOD_PATH, { generation = 1 })
+  check(#run.errors == 0, version .. ": load error: " .. table.concat(run.errors, "\n"))
+  save.inventory = { CASCADEBADGE = 1 }
+  check(partyKnows(run, "CUT") == nil, version .. ": engine path refuses CUT without HM_CUT")
+  save.inventory = { HM_CUT = 1 }
+  check(partyKnows(run, "CUT") == nil, version .. ": engine path refuses CUT without CASCADEBADGE")
+  save.inventory = { HM_CUT = 1, CASCADEBADGE = 1 }
+  check(partyKnows(run, "CUT") == mon, version .. ": engine path grants CUT from the bag")
+  save.inventory = { HM_SURF = 1, SOULBADGE = 1 }
+  check(partyKnows(run, "SURF") == mon, version .. ": engine path grants SURF from the bag")
+  run.release()
+end
+
+-- Gen 2: FieldMoves.partyMoveUser and the overworld try* functions.
+local FieldMoves2 = require("src.world.gen2.FieldMoves")
+for _, version in ipairs({ "gold", "silver", "crystal" }) do
+  GameVersion.set(version)
+  Runtime.reset()
+  local mon = knowsTackle()
+  local party = { mon }
+  local save = {
+    party = party,
+    inventory = { HM_STRENGTH = 1, HM_WHIRLPOOL = 1 },
+    player = { badges = { PLAIN = true, GLACIER = true } },
+  }
+  local fieldCtx = { party = party, save = save }
+
+  local vanilla = Sdk.loadNone({ generation = 2 })
+  check(not FieldMoves2.tryStrengthOW(fieldCtx).ok, version .. ": vanilla refuses STRENGTH without a mon that knows it")
+  vanilla.release()
+
+  local run = Sdk.loadMod(MOD_PATH, { generation = 2 })
+  check(#run.errors == 0, version .. ": load error: " .. table.concat(run.errors, "\n"))
+  local strength = FieldMoves2.tryStrengthOW(fieldCtx)
+  check(strength.ok and strength.mon == mon, version .. ": engine path grants STRENGTH from the bag")
+  check(FieldMoves2.partyMoveUser(party, "WHIRLPOOL", fieldCtx) == mon, version .. ": engine path grants WHIRLPOOL from HM_WHIRLPOOL")
+  check(FieldMoves2.partyMoveUser(party, "ROCK_SMASH", fieldCtx) == nil, version .. ": HM_WHIRLPOOL does not unlock ROCK_SMASH (a TM in Gen 2)")
+  save.player.badges.PLAIN = nil
+  check(not FieldMoves2.tryStrengthOW(fieldCtx).ok, version .. ": engine path refuses STRENGTH without PLAINBADGE")
+  run.release()
 end
 
 print(string.format("Integration suite passed: %d assertions across %d profiles", total, #PROFILES))

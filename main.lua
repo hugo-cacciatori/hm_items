@@ -2,7 +2,10 @@
 -- Allows executing field HM moves when carrying the HM item and holding the requisite badge,
 -- without requiring any Pokémon in the party to know the move.
 
-local HM_MOVE_ITEMS = {
+-- Gen 3 numbers its HMs; Gen 1 and Gen 2 name them after the move instead
+-- (save.inventory["HM_CUT"], src/import/RomExtractor.lua), so Gen 2's Rock
+-- Smash, a TM there, has no HM item and stays locked.
+local GEN3_HM_ITEMS = {
   CUT = "HM01",
   FLY = "HM02",
   SURF = "HM03",
@@ -11,7 +14,6 @@ local HM_MOVE_ITEMS = {
   ROCK_SMASH = "HM06",
   WATERFALL = "HM07",
   DIVE = "HM08",
-  WHIRLPOOL = "HM06", -- Gen 2 maps Whirlpool to HM06, Waterfall to HM07
 }
 
 local function normalizeMoveKey(moveId)
@@ -78,41 +80,29 @@ local function hasGen3Item(save, session, itemKey)
   return false
 end
 
-local function hasGen1or2Item(save, itemKey)
-  if not save or not save.inventory then return false end
-  local inv = save.inventory
-  if (inv[itemKey] or 0) > 0 then return true end
-  local alt = "ITEM_" .. itemKey
-  if (inv[alt] or 0) > 0 then return true end
-  local stripped = itemKey:gsub("^HM0?", "HM_"):gsub("^HM0?", "HM")
-  if (inv[stripped] or 0) > 0 then return true end
-  return false
+local function hasGen1or2Item(save, moveKey)
+  local count = save and save.inventory and save.inventory["HM_" .. moveKey]
+  return count ~= nil and count ~= false and count ~= 0
 end
 
-local function playerHasHmItem(save, session, data, moveKey)
-  local itemKey = HM_MOVE_ITEMS[moveKey]
-  if not itemKey then return false end
+local function playerHasHmItem(generation, save, session, moveKey)
+  if generation ~= 3 then return hasGen1or2Item(save, moveKey) end
+  local itemKey = GEN3_HM_ITEMS[moveKey]
+  return itemKey ~= nil and hasGen3Item(save, session, itemKey)
+end
 
-  -- Gen 2 special case: Waterfall is HM07 in Gen 2 (Whirlpool is HM06)
-  if moveKey == "WATERFALL" then
-    local isGen2 = false
-    local FieldMovesGen2 = package.loaded["src.world.gen2.FieldMoves"]
-    if FieldMovesGen2 and FieldMovesGen2.BADGE and FieldMovesGen2.BADGE.WHIRLPOOL then
-      isGen2 = true
-    end
-    if isGen2 then itemKey = "HM07" end
+local function playerHasBadge(generation, save, session, data, moveKey)
+  if generation == 1 then
+    local FieldDefaults = require("src.world.FieldDefaults")
+    local gate = (FieldDefaults.constant(data, "hmBadges") or {})[moveKey]
+    if not gate or not gate.badge then return true end
+    return save and save.inventory and save.inventory[gate.badge] and true or false
+  end
+  if generation == 2 then
+    local FieldMovesGen2 = require("src.world.gen2.FieldMoves")
+    return FieldMovesGen2.hasBadge(save, FieldMovesGen2.BADGE[moveKey])
   end
 
-  -- Check Gen 3 first
-  if hasGen3Item(save, session, itemKey) then return true end
-
-  -- Check Gen 1 / 2
-  if hasGen1or2Item(save, itemKey) then return true end
-
-  return false
-end
-
-local function playerHasBadge(save, session, data, moveKey)
   -- 1) Gen 3 check via FieldMoves.hasBadge
   local FieldMovesGen3 = package.loaded["src.core.game3.field_moves"]
   if FieldMovesGen3 and FieldMovesGen3.hasBadge then
@@ -127,25 +117,7 @@ local function playerHasBadge(save, session, data, moveKey)
     if ok and res ~= nil then return res == true end
   end
 
-  -- 2) Gen 2 check via FieldMovesGen2.hasBadge
-  local FieldMovesGen2 = package.loaded["src.world.gen2.FieldMoves"]
-  if FieldMovesGen2 and FieldMovesGen2.hasBadge and FieldMovesGen2.BADGE then
-    local badgeName = FieldMovesGen2.BADGE[moveKey]
-    if badgeName then
-      local ok, res = pcall(FieldMovesGen2.hasBadge, save, badgeName)
-      if ok and res ~= nil then return res == true end
-    end
-  end
-
-  -- 3) Gen 1 check via FieldDefaults / hmBadges
-  local FieldDefaults = package.loaded["src.world.FieldDefaults"]
-  local hmBadges = (FieldDefaults and data and FieldDefaults.constant(data, "hmBadges")) or {}
-  local badgeEntry = hmBadges[moveKey]
-  if badgeEntry and badgeEntry.badge and save and save.inventory then
-    return (save.inventory[badgeEntry.badge] or 0) > 0 or save.inventory[badgeEntry.badge] == true
-  end
-
-  -- Direct save.player.badges lookup
+  -- 2) Direct save.player.badges lookup
   if save and save.player and save.player.badges then
     local b = save.player.badges
     if b[moveKey] ~= nil then return b[moveKey] == true end
@@ -167,6 +139,10 @@ end
 return function(mod)
   if not (mod and mod.hooks and mod.hooks.wrap) then return end
 
+  local generation = tonumber(mod.generation)
+    or tonumber(mod.game and mod.game.generation)
+    or tonumber(require("src.core.GameVersion").generation())
+
   mod.hooks:wrap("fieldmove.eligibility", function(nextFn, moveId, ctx)
     -- 1) Vanilla / higher-priority check
     local mon = nextFn(moveId, ctx)
@@ -176,7 +152,8 @@ return function(mod)
     local moveKey = normalizeMoveKey(moveId)
     if not moveKey then return nil end
 
-    local party = ctx and ctx.party
+    -- Gen 1's ctx carries only save and data; its party lives on the save.
+    local party = ctx and (ctx.party or (ctx.save and ctx.save.party))
     if not party or #party == 0 then return nil end
 
     -- Find first available non-egg mon in party
@@ -192,12 +169,12 @@ return function(mod)
     end
 
     -- 3) Check player possesses the corresponding HM item
-    if not playerHasHmItem(save, session, data, moveKey) then
+    if not playerHasHmItem(generation, save, session, moveKey) then
       return nil
     end
 
     -- 4) Check player possesses the required gym badge
-    if not playerHasBadge(save, session, data, moveKey) then
+    if not playerHasBadge(generation, save, session, data, moveKey) then
       return nil
     end
 

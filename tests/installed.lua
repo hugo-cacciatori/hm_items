@@ -118,8 +118,15 @@ if generation == 3 then
   return
 end
 
+-- Gen 1/2 inventories key HMs by move name; the installed item table must agree.
+if generation ~= 3 then
+  local items = game.data.items or {}
+  assert(items.HM_CUT and items.HM_SURF, "installed items lack HM_CUT/HM_SURF for " .. TEST_VERSION)
+  assert(generation ~= 2 or items.HM_ROCK_SMASH == nil, "Gen 2 has an HM_ROCK_SMASH item")
+end
+
 if generation == 1 then
-  local inventory = { HM01 = 1, HM03 = 1 }
+  local inventory = { HM_CUT = 1, HM_SURF = 1 }
   local save = { inventory = inventory, player = { badges = {} } }
   local ctxCut = { save = save, party = party, data = game.data }
 
@@ -131,16 +138,16 @@ if generation == 1 then
   local res2 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   assert(res2 ~= nil, "CUT refused with HM item and badge")
 
-  inventory.HM03 = nil
+  inventory.HM_SURF = nil
   inventory.SOULBADGE = 1
   save.player.badges.SURF = true
   local ctxSurf = { save = save, party = party, data = game.data }
   local res3 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res3 == nil, "SURF allowed without HM03")
+  assert(res3 == nil, "SURF allowed without HM_SURF")
 
-  inventory.HM03 = 1
+  inventory.HM_SURF = 1
   local res4 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res4 ~= nil, "SURF refused with HM03 and badge")
+  assert(res4 ~= nil, "SURF refused with HM_SURF and badge")
 
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
@@ -151,7 +158,7 @@ if generation == 1 then
 end
 
 if generation == 2 then
-  local inventory = { HM01 = 1, HM03 = 1 }
+  local inventory = { HM_CUT = 1, HM_SURF = 1 }
   local save = { inventory = inventory, player = { badges = {} } }
   local ctxCut = { save = save, party = party, data = game.data }
 
@@ -163,16 +170,16 @@ if generation == 2 then
   local res2 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   assert(res2 ~= nil, "CUT refused with HM item and badge")
 
-  inventory.HM03 = nil
+  inventory.HM_SURF = nil
   save.player.badges.FOG = true
   save.player.badges.SURF = true
   local ctxSurf = { save = save, party = party, data = game.data }
   local res3 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res3 == nil, "SURF allowed without HM03")
+  assert(res3 == nil, "SURF allowed without HM_SURF")
 
-  inventory.HM03 = 1
+  inventory.HM_SURF = 1
   local res4 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res4 ~= nil, "SURF refused with HM03 and badge")
+  assert(res4 ~= nil, "SURF refused with HM_SURF and badge")
 
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
