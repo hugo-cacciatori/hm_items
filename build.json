@@ -1,0 +1,4 @@
+{
+  "files": ["manifest.json", "main.lua", "README.md", "LICENSE"],
+  "libs": []
+}

@@ -20,12 +20,6 @@ To perform a field HM move:
 
 Your Pokémon do not need to learn the move or sacrifice a move slot. Save data is never modified.
 
-## Building and Verification
+## Development
 
-Run tests headlessly:
-```bash
-python tools/test.py
-python tools/package.py
-python tools/test_package.py
-python tools/test_installed.py
-```
+The repository holds the mod's source and its headless test suites. Releases are built and verified with the project's build tooling: the suites run on the packaged zip in an external engine copy, then against a staged copy of the installed game and its imported data. Install the release zip.
