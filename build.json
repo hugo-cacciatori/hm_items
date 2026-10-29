@@ -1,4 +1,14 @@
 {
-  "files": ["manifest.json", "main.lua", "README.md", "LICENSE"],
-  "libs": []
+  "files": [
+    "manifest.json",
+    "main.lua",
+    "README.md",
+    "LICENSE"
+  ],
+  "libs": [
+    "field_moves"
+  ],
+  "wires": [
+    "field_moves.install"
+  ]
 }
