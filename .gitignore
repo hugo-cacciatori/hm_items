@@ -1,8 +1,5 @@
 dist/
 lib/
+tests/out/
 __pycache__/
 *.pyc
-AGENTS.md
-CLAUDE.md
-docs/
-.git-docs/
