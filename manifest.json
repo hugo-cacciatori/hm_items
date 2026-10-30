@@ -4,8 +4,13 @@
   "version": "0.2.0",
   "api": 2,
   "entry": "main.lua",
-  "games": ["all"],
-  "permissions": ["engine_internals"],
+  "games": [
+    "all"
+  ],
+  "permissions": [
+    "engine_internals"
+  ],
   "description": "Enables field HM actions when carrying the HM item in the bag and holding the requisite badge, performed by a party Pokémon able to learn the move, without it knowing the move.",
-  "author": "Hugo Cacciatori"
+  "author": "Hugo Cacciatori",
+  "github": "hugo-cacciatori/hm_items"
 }

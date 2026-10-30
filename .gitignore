@@ -1,9 +1,8 @@
 dist/
+lib/
 __pycache__/
 *.pyc
-.pytest_cache/
 AGENTS.md
 CLAUDE.md
 docs/
 .git-docs/
-lib/
