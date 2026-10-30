@@ -47,13 +47,13 @@ assert(#loader.errors == 0, table.concat(loader.errors, "\n"))
 local mod = loader.mods.hm_items
 assert(mod and mod.state == "loaded", "installed mod did not load for " .. TEST_VERSION)
 
-local mon = {
-  species = (generation == 3 and 16) or "PIDGEY",
-  nickname = "BIRDY",
-  moves = { { id = (generation == 3 and 33) or "TACKLE" } },
-  hp = 20, maxHp = 20, level = 5,
-}
-local party = { mon }
+-- The real learnsets of the import decide: Pidgey learns neither Cut nor Surf, Bulbasaur learns Cut, Squirtle Surf.
+local function member(species3, species, name)
+  return { species = (generation == 3 and species3) or species, nickname = name,
+           moves = { { id = (generation == 3 and 33) or "TACKLE" } }, hp = 20, maxHp = 20, level = 5 }
+end
+local party = { member(16, "PIDGEY", "BIRDY"), member(1, "BULBASAUR", "BULBA"), member(7, "SQUIRTLE", "SQUIRT") }
+local onlyPidgey = { party[1] }
 
 if generation == 3 then
   local bag = {
@@ -69,52 +69,54 @@ if generation == 3 then
   local ctxCut = { save = save, session = session, party = party, data = game.data }
 
   -- 1) Without badge -> nil
+  -- badges live in the script flag store the engine's badge check reads first
+  local Space = require("src.core.game3.scripting.space")
+  local Flags = require("src.core.game3.scripting.flags")
+  local FieldMoves = require("src.core.game3.field_moves")
+  Space.store = Flags.newStore()
+  local function badge(move)
+    local flag = FieldMoves.badgeFlag(move)
+    session.flags[flag] = true
+    Flags.setFlag(Space.store, nil, flag, true)
+    save.player.badges[move] = true
+  end
   local res1 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   assert(res1 == nil, "CUT allowed without badge")
 
-  -- Grant CUT badge
-  if TEST_VERSION == "firered" or TEST_VERSION == "leafgreen" then
-    session.flags[0x821] = true
-    save.player.badges.CUT = true
-  else
-    session.flags[0x867] = true
-    save.player.badges.CUT = true
-  end
+  badge("CUT")
 
-  -- 2) With HM01 and badge -> returns mon
+  -- 2) With HM01 and badge -> the Pokémon able to learn Cut performs it
   local res2 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
-  assert(res2 ~= nil, "CUT refused with HM item and badge")
+  assert(res2 == party[2], "CUT with HM item and badge not performed by Bulbasaur (got "
+    .. tostring(res2 and res2.nickname) .. ")")
+  local resNobody = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT",
+    { save = save, session = session, party = onlyPidgey, data = game.data })
+  assert(resNobody == nil, "CUT allowed with no party Pokémon able to learn it")
 
   -- 3) Missing HM item -> nil
   bag.pockets.TM_CASE[2] = nil
   local ctxSurf = { save = save, session = session, party = party, data = game.data }
-  if TEST_VERSION == "firered" or TEST_VERSION == "leafgreen" then
-    session.flags[0x824] = true
-    save.player.badges.SURF = true
-  else
-    session.flags[0x86B] = true
-    save.player.badges.SURF = true
-  end
+  badge("SURF")
   local res3 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
   assert(res3 == nil, "SURF allowed without HM03")
 
   -- Restore HM03
   bag.pockets.TM_CASE[2] = { id = "HM03", qty = 1 }
   local res4 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res4 ~= nil, "SURF refused with HM03 and badge")
+  assert(res4 == party[3], "SURF with HM03 and badge not performed by Squirtle")
 
   -- 4) Egg exclusion
-  party[1].isEgg = true
+  party[3].isEgg = true
   local resEgg = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
   assert(resEgg == nil, "Egg allowed to use field move")
-  party[1].isEgg = false
+  party[3].isEgg = false
 
   -- 5) Rollback restores vanilla refusal
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   assert(resRollback == nil, "Rollback did not restore vanilla refusal")
 
-  print("PASS installed " .. TEST_VERSION .. ": HM field moves, badge checks, egg check, and rollback")
+  print("PASS installed " .. TEST_VERSION .. ": HM field moves, learnsets, badge checks, egg check, and rollback")
   return
 end
 
@@ -136,7 +138,9 @@ if generation == 1 then
   inventory.CASCADEBADGE = 1
   save.player.badges.CUT = true
   local res2 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
-  assert(res2 ~= nil, "CUT refused with HM item and badge")
+  assert(res2 == party[2], "CUT with HM item and badge not performed by Bulbasaur")
+  assert(loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT",
+    { save = save, party = onlyPidgey, data = game.data }) == nil, "CUT allowed with no party Pokémon able to learn it")
 
   inventory.HM_SURF = nil
   inventory.SOULBADGE = 1
@@ -147,7 +151,7 @@ if generation == 1 then
 
   inventory.HM_SURF = 1
   local res4 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res4 ~= nil, "SURF refused with HM_SURF and badge")
+  assert(res4 == party[3], "SURF with HM_SURF and badge not performed by Squirtle")
 
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
@@ -168,7 +172,9 @@ if generation == 2 then
   save.player.badges.HIVE = true
   save.player.badges.CUT = true
   local res2 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
-  assert(res2 ~= nil, "CUT refused with HM item and badge")
+  assert(res2 == party[2], "CUT with HM item and badge not performed by Bulbasaur")
+  assert(loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT",
+    { save = save, party = onlyPidgey, data = game.data }) == nil, "CUT allowed with no party Pokémon able to learn it")
 
   inventory.HM_SURF = nil
   save.player.badges.FOG = true
@@ -179,7 +185,7 @@ if generation == 2 then
 
   inventory.HM_SURF = 1
   local res4 = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  assert(res4 ~= nil, "SURF refused with HM_SURF and badge")
+  assert(res4 == party[3], "SURF with HM_SURF and badge not performed by Squirtle")
 
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)

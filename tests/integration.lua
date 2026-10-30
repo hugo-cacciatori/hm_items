@@ -43,23 +43,31 @@ local function sampleData(gen)
       }
     },
     pokemon = {
-      PIDGEY = { name = "PIDGEY", id = "PIDGEY" },
+      PIDGEY = { name = "PIDGEY", id = "PIDGEY", tmhm = { "FLY" } },
+      BULBASAUR = { name = "BULBASAUR", id = "BULBASAUR", tmhm = { "CUT" } },
+      SQUIRTLE = { name = "SQUIRTLE", id = "SQUIRTLE", tmhm = { "SURF", "STRENGTH" } },
     }
   }
 end
+
+-- Gen 3 learnsets come from the engine's TM/HM table (the import's data, exercised by the release gate); here a
+-- stand-in with the same answers: Pidgey (16) learns Fly, Bulbasaur (1) Cut, Squirtle (7) Surf and Strength.
+local Pokemon3 = require("src.core.game3.pokemon")
+local realCanLearn = Pokemon3.canLearnTmItem
+local LEARNS = { [16] = { HM02 = true }, [1] = { HM01 = true }, [7] = { HM03 = true, HM04 = true } }
+Pokemon3.canLearnTmItem = function(species, item) return (LEARNS[tonumber(species)] or {})[item] == true end
 
 -- ------------------------------------------------------------ 2. Run across profiles
 for _, p in ipairs(PROFILES) do
   GameVersion.set(p.version)
   Runtime.reset()
 
-  local mon = {
-    species = (p.gen == 3 and 16) or "PIDGEY",
-    nickname = "BIRDY",
-    moves = { { id = (p.gen == 3 and 33) or "TACKLE" } }, -- Tackle
-    hp = 20, maxHp = 20, level = 5,
-  }
-  local party = { mon }
+  local function member(species3, species, name)
+    return { species = (p.gen == 3 and species3) or species, nickname = name,
+             moves = { { id = (p.gen == 3 and 33) or "TACKLE" } }, hp = 20, maxHp = 20, level = 5 }
+  end
+  -- nobody knows an HM; only Bulbasaur can learn Cut and only Squirtle Surf
+  local party = { member(16, "PIDGEY", "BIRDY"), member(1, "BULBASAUR", "BULBA"), member(7, "SQUIRTLE", "SQUIRT") }
 
   local bag = {}
   if p.gen == 3 then
@@ -100,6 +108,16 @@ for _, p in ipairs(PROFILES) do
 
   local run = Sdk.loadMod(MOD_PATH, opts)
   check(#run.errors == 0, p.version .. ": load error: " .. table.concat(run.errors, "\n"))
+  -- Gen 3 badges live in the script flag store the engine's badge check reads first (as in the game)
+  local Space3, Flags3
+  if p.gen == 3 then
+    Space3, Flags3 = require("src.core.game3.scripting.space"), require("src.core.game3.scripting.flags")
+    Space3.store = Flags3.newStore()
+  end
+  local function badge3(flag)
+    session.flags[flag] = true
+    if Space3 then Flags3.setFlag(Space3.store, nil, flag, true) end
+  end
   check(run.mod and run.mod.state == "loaded", p.version .. ": mod loaded")
 
   local loader = run.loader
@@ -111,14 +129,9 @@ for _, p in ipairs(PROFILES) do
 
   -- Grant CUT badge
   if p.gen == 3 then
-    if p.version == "firered" or p.version == "leafgreen" then
-      session.flags[0x821] = true -- FLAG_BADGE02_GET (Cascade)
-      save.player.badges.CUT = true
-    else
-      -- RSE Stone Badge (Cut)
-      session.flags[0x867] = true -- FLAG_BADGE01_GET
-      save.player.badges.CUT = true
-    end
+    -- each version's own badge flag for Cut (Cascade in FRLG, Stone in RSE), as the engine maps it
+    badge3(require("src.core.game3.field_moves").badgeFlag("CUT"))
+    save.player.badges.CUT = true
   elseif p.gen == 2 then
     save.player.badges.HIVE = true -- Hive Badge for Cut in Gen 2
     save.player.badges.CUT = true
@@ -130,17 +143,16 @@ for _, p in ipairs(PROFILES) do
 
   -- Case B: Has HM01 AND has Cut Badge -> fieldmove.eligibility returns party mon!
   local resCutOk = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
-  check(resCutOk ~= nil, p.version .. ": accepts CUT when HM item and badge are owned")
+  check(resCutOk == party[2], p.version .. ": CUT with the HM item and badge is performed by the one Pokémon able to learn it")
+  local onlyPidgey = { party[1] }
+  local resNobody = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT",
+    { save = save, session = session, party = onlyPidgey, data = opts.data })
+  check(resNobody == nil, p.version .. ": refused when no party Pokémon can learn CUT")
 
   -- Case C: Has Surf Badge but missing HM item -> returns nil
   if p.gen == 3 then
-    if p.version == "firered" or p.version == "leafgreen" then
-      session.flags[0x824] = true -- Soul Badge
-      save.player.badges.SURF = true
-    else
-      session.flags[0x86B] = true -- Balance Badge
-      save.player.badges.SURF = true
-    end
+    badge3(require("src.core.game3.field_moves").badgeFlag("SURF")) -- Soul (FRLG) / Balance (RSE)
+    save.player.badges.SURF = true
   elseif p.gen == 2 then
     save.player.badges.FOG = true -- Fog Badge
     save.player.badges.SURF = true
@@ -167,21 +179,23 @@ for _, p in ipairs(PROFILES) do
 
   -- Now Surf succeeds
   local resSurfOk = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
-  check(resSurfOk ~= nil, p.version .. ": accepts SURF when both HM item and badge are owned")
+  check(resSurfOk == party[3], p.version .. ": SURF is performed by the Pokémon able to learn it")
 
-  -- Case D: Egg mon exclusion (party only has eggs)
-  party[1].isEgg = true
-  party[1].egg = true
+  -- Case D: an egg never performs, even when its species could learn the move
+  party[3].isEgg = true
+  party[3].egg = true
   local resEgg = loader.hooks:call("fieldmove.eligibility", function() return nil end, "SURF", ctxSurf)
   check(resEgg == nil, p.version .. ": egg is not eligible to perform field move")
-  party[1].isEgg = false
-  party[1].egg = false
+  party[3].isEgg = false
+  party[3].egg = false
 
   -- Case E: Rollback cleanly restores vanilla refusal
   loader:_rollback("hm_items")
   local resRollback = loader.hooks:call("fieldmove.eligibility", function() return nil end, "CUT", ctxCut)
   check(resRollback == nil, p.version .. ": rollback restores vanilla refusal")
 end
+
+Pokemon3.canLearnTmItem = realCanLearn
 
 -- ------------------------------------------------------------ 3. Real engine call paths
 -- The cases above call the hook directly with a hand-built ctx. These go
@@ -195,9 +209,11 @@ local function setUpvalue(fn, name, value)
   end
 end
 
+-- A Squirtle that knows only Tackle; learnsets below are stand-ins for the game data the engine passes.
 local function knowsTackle()
-  return { species = "PIDGEY", hp = 20, maxHp = 20, level = 5, moves = { { id = "TACKLE" } } }
+  return { species = "SQUIRTLE", hp = 20, maxHp = 20, level = 5, moves = { { id = "TACKLE" } } }
 end
+local LEARNSETS = { pokemon = { SQUIRTLE = { tmhm = { "SURF", "STRENGTH", "WHIRLPOOL" } } } }
 
 -- Gen 1: OverworldState:partyKnows passes only { save, data }.
 local OverworldState = require("src.world.OverworldController")
@@ -207,7 +223,7 @@ for _, version in ipairs({ "red", "blue", "yellow" }) do
   local mon = knowsTackle()
   local save = { party = { mon }, inventory = {} }
   local function partyKnows(run, move)
-    setUpvalue(OverworldState.partyKnows, "Game", { save = save, data = run.data })
+    setUpvalue(OverworldState.partyKnows, "Game", { save = save, data = LEARNSETS })
     return OverworldState.partyKnows({}, move)
   end
 
@@ -223,7 +239,7 @@ for _, version in ipairs({ "red", "blue", "yellow" }) do
   save.inventory = { HM_CUT = 1 }
   check(partyKnows(run, "CUT") == nil, version .. ": engine path refuses CUT without CASCADEBADGE")
   save.inventory = { HM_CUT = 1, CASCADEBADGE = 1 }
-  check(partyKnows(run, "CUT") == mon, version .. ": engine path grants CUT from the bag")
+  check(partyKnows(run, "CUT") == nil, version .. ": engine path refuses CUT: Squirtle cannot learn it")
   save.inventory = { HM_SURF = 1, SOULBADGE = 1 }
   check(partyKnows(run, "SURF") == mon, version .. ": engine path grants SURF from the bag")
   run.release()
@@ -241,7 +257,7 @@ for _, version in ipairs({ "gold", "silver", "crystal" }) do
     inventory = { HM_STRENGTH = 1, HM_WHIRLPOOL = 1 },
     player = { badges = { PLAIN = true, GLACIER = true } },
   }
-  local fieldCtx = { party = party, save = save }
+  local fieldCtx = { party = party, save = save, data = LEARNSETS }
 
   local vanilla = Sdk.loadNone({ generation = 2 })
   check(not FieldMoves2.tryStrengthOW(fieldCtx).ok, version .. ": vanilla refuses STRENGTH without a mon that knows it")

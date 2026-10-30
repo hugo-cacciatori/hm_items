@@ -2,7 +2,7 @@
 
 A quality-of-life mod for Pokémon games running on the Love2D engine.
 
-Allows triggering field HM moves (Cut, Fly, Surf, Strength, Flash, Rock Smash, Waterfall, Dive) directly from the overworld or context menus as long as you carry the corresponding HM item in your bag and have earned the necessary gym badge, without requiring any Pokémon in your party to learn or know the move.
+Allows triggering field HM moves (Cut, Fly, Surf, Strength, Flash, Rock Smash, Waterfall, Dive) directly from the overworld or context menus as long as you carry the corresponding HM item in your bag, have earned the necessary gym badge, and have a Pokémon in your party that could learn the move, without it having to know the move.
 
 ## Supported Games
 
@@ -16,9 +16,9 @@ Supports all generations:
 To perform a field HM move:
 1. You must own the corresponding HM item in your inventory (e.g. `HM01`–`HM08`).
 2. You must have earned the required gym badge for that field move in your game version.
-3. You must have at least one Pokémon in your party (non-egg) to perform the action.
+3. A Pokémon in your party (not an egg) must be able to learn the move from its HM. The first such Pokémon in your party performs it.
 
-Your Pokémon do not need to learn the move or sacrifice a move slot. Save data is never modified.
+That Pokémon does not need to actually learn the move or give up a move slot. Save data is never modified.
 
 ## Development
 
